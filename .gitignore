@@ -1,0 +1,40 @@
+.venv/
+__pycache__/
+*.pyc
+.models/
+
+# Local environments, downloads, and build output
+venv/
+.cache/
+models/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+
+# User audio and generated subtitles are not project source
+*.[mM][pP]3
+*.[wW][aA][vV]
+*.[fF][lL][aA][cC]
+*.[mM]4[aA]
+*.[oO][gG][gG]
+*.[mM][pP]4
+*.[sS][rR][tT]
+*.[vV][tT][tT]
+*.bin
+*.safetensors
+*.onnx
+
+# Credentials and machine-specific files
+.env
+.env.*
+.ssh/
+id_ed25519*
+id_rsa*
+*.pem
+*.key
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.video-test/
