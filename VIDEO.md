@@ -102,7 +102,13 @@ does not export CD+G, MIDI, or proprietary karaoke-machine formats.
 ## Appearance
 
 Default: landscape 1920x1080 at 30 fps, a photo cropped to fill, a 25% black
-overlay, and bold warm-gold lyrics near the bottom with a dark outline and shadow.
+overlay, and bold warm-gold lyrics centered in the frame with a dark outline and shadow.
+The default font size is 80 pixels to improve readability. Middle placement leaves
+more space for social-app captions at the bottom; preview in your app because its
+interface and overlays vary. Use `--lyrics-position bottom` for the previous placement.
+An explicit `--font-size` overrides the default: replace `--font-size 68` in older
+commands with `--font-size 80` to get larger lyrics. Rerender existing videos to
+apply these changes.
 Photos are still images with optional crossfades, without animated zooms or beat-reactive effects.
 
 | Option | Choices / meaning |
@@ -111,7 +117,8 @@ Photos are still images with optional crossfades, without animated zooms or beat
 | `--theme` | `gold` (default), `white`, or mint `neon` |
 | `--font` | Installed font family; Windows default `Microsoft YaHei`, otherwise `sans-serif` |
 | `--font-file` | Load a local TTF/OTF/TTC; also set `--font` to the family name inside that font |
-| `--font-size` | Font size in output pixels, 12–200; default 56 |
+| `--font-size` | Font size in output pixels, 12–200; default 80 |
+| `--lyrics-position` | `middle` (default) or `bottom` |
 | `--fit` | `cover` crops the edges to fill; `contain` keeps the full photo with black bars |
 | `--dim` | Black overlay opacity, 0–1; default 0.25 |
 | `--seconds` | Export just the beginning for a quick preview |
@@ -122,8 +129,15 @@ For a bold Chinese look, the Windows default Microsoft YaHei works well. For
 other looks, choose an installed font family and preview the result; missing
 fonts or characters may trigger renderer fallback. No font files are bundled.
 Chinese and other scripts require a font containing the relevant glyphs.
-Long captions wrap automatically where supported by the renderer; for exact
-line breaks, edit the SRT or reduce `--font-size` before rendering.
+Chinese lyrics get wider letter spacing; English rows keep normal spacing.
+Long captions are split into balanced rows with a small gap between them,
+breaking after punctuation or at spaces where possible and between Chinese
+characters only when needed. Line breaks already in the SRT are kept; for exact
+breaks, edit the SRT or reduce `--font-size` before rendering.
+
+Whisper often starts the first lyric at 0:00 and stretches it over the intro.
+By default, a cue that lasts much longer than the song's singing pace starts
+later, near the vocals; pass `--keep-cue-starts` to use SRT times exactly.
 
 ```powershell
 python create_video.py "song.mp3" "photo.jpg" --srt "song.srt" --font "Microsoft YaHei" --font-size 64 --theme white

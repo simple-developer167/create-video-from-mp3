@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -f en_after.png en2_after.png)",
+      "Bash(PYTHONIOENCODING=utf-8 python preview.py \"One Second Too Late|125|en3|portrait\" \"BESIDE THE EMPTY CHAIR|172|en4|landscape\")"
+    ]
+  }
+}
