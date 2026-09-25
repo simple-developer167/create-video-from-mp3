@@ -31,6 +31,30 @@ class VideoTests(unittest.TestCase):
         self.assertIn('0:00:18.00,0:00:20.00', result)
         self.assertEqual(sum(map(int, re.findall(r'\{\\kf(\d+)\}', result))), 200)
 
+    def test_long_lines_wrap_at_phrases_with_language_spacing(self):
+        english = "Beside the empty chair, I close my eyes, you're everywhere"
+        self.assertEqual(create_video.wrap_line(english, 1612, 68, 1),
+                         ['Beside the empty chair,', "I close my eyes, you're everywhere"])
+        self.assertEqual(create_video.wrap_line('西安一轮明月 落在千年盛唐', 907, 68, 10),
+                         ['西安一轮明月', '落在千年盛唐'])
+        self.assertEqual(create_video.wrap_line('短句', 907, 68, 10), ['短句'])
+        self.assertGreater(create_video.letter_spacing('你好', 68), create_video.letter_spacing('hello', 68))
+        source = '1\n00:00:01,000 --> 00:00:04,000\n西安一轮明月 落在千年盛唐\n'
+        result = create_video.make_ass(source, 1080, 1920, 'Arial', 68, 'gold', karaoke=True)
+        self.assertIn(r'\fsp10}', result)
+        self.assertEqual(result.count(r'\h\N'), 1)
+        self.assertEqual(sum(map(int, re.findall(r'\{\\kf(\d+)\}', result))), 300)
+
+    def test_cue_stretched_over_intro_starts_near_vocals(self):
+        source = ('1\n00:00:00,000 --> 00:00:20,000\n北京一场晨光\n\n'
+                  '2\n00:00:20,000 --> 00:00:23,000\n照亮万里城墙\n\n'
+                  '3\n00:00:23,000 --> 00:00:26,000\n西安一轮明月\n')
+        result = create_video.make_ass(source, 1920, 1080, 'Arial', 56, 'gold')
+        self.assertIn('0:00:15.75,0:00:20.00', result)
+        self.assertIn('0:00:20.00,0:00:23.00', result)
+        kept = create_video.make_ass(source, 1920, 1080, 'Arial', 56, 'gold', trim_intros=False)
+        self.assertIn('0:00:00.00,0:00:20.00', kept)
+
     def test_slideshow_durations_and_centered_transitions(self):
         lengths, offsets, fade = create_video.slideshow_timing(60, 3, 2)
         self.assertEqual(lengths, [21, 22, 21])

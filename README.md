@@ -68,6 +68,7 @@ python create_lyric.py song.mp3 --offline
 python create_lyric.py song.mp3 --model-dir .models
 python create_lyric.py song.mp3 --keep-music-labels
 python create_lyric.py song.mp3 --overwrite
+python create_lyric.py song.mp3 --language zh --lyrics-start 18 --overwrite
 python create_lyric.py --help
 ```
 
@@ -82,6 +83,7 @@ The default `small` model runs on CPU with int8 precision. `tiny` and `base` are
 | `audio` | Required path to MP3 or another format supported by the decoder |
 | `-o`, `--output` | SRT path; defaults to the input filename with `.srt` |
 | `--language` | Language code, or `auto` (default) |
+| `--lyrics-start` | Begin transcription at this time in seconds; keep original MP3 timestamps (default: 0) |
 | `--model` | Model name or local directory; default `small` |
 | `--device` | `cpu` (default), `cuda`, or `auto` |
 | `--compute-type` | Precision; defaults to `int8` for CPU, backend default otherwise |
@@ -97,6 +99,17 @@ arguments, `130` interrupted transcription. A legacy Windows console may print
 escaped characters in paths; this does not change UTF-8 subtitle contents.
 
 ## Troubleshooting
+
+If lyrics appear during an instrumental intro, correct the transcription at its
+source: run `python create_lyric.py song.mp3 --lyrics-start 18 --overwrite`, replacing
+18 with the actual vocal start. The model skips that intro, and the SRT exporter
+also prevents cues before the cutoff. Later timestamps remain relative to the
+original audio, so no offset is needed in the video command. Regenerate the MP4
+afterwards; existing videos do not update automatically. This is an explicit
+cutoff, not automatic singing detection, and does not guarantee accuracy later
+in the song. Do not combine a positive `--lyrics-start` with `--vad`: the backend
+does not apply VAD when a clip start is supplied. A cutoff past the end produces
+no lyrics and leaves an existing SRT intact.
 
 - **Chinese text looks garbled:** select UTF-8 in your subtitle player. The tool writes UTF-8 without a BOM. Chinese output can mix Simplified and Traditional characters; it does not normalize between them.
 - **Music captions or invented text:** known labels are filtered automatically. Try `--vad`, select the language explicitly, or try a larger model, then review the result.

@@ -41,10 +41,10 @@ def timestamp(milliseconds):
     return f"{hours:02}:{minutes:02}:{seconds:02},{millis:03}"
 
 
-def render_srt(segments, keep_music_labels=False):
+def render_srt(segments, keep_music_labels=False, lyrics_start=0):
     """Preserve model segments; normalize timestamps and remove empty cues."""
     cues = []
-    previous_end = 0
+    previous_end = round(lyrics_start * 1000)
     for segment in segments:
         text = " ".join(segment.text.split())
         if not keep_music_labels:
@@ -53,6 +53,8 @@ def render_srt(segments, keep_music_labels=False):
             continue
         if not all(math.isfinite(t) for t in (segment.start, segment.end)):
             raise ValueError("Transcription returned invalid timestamps")
+        if segment.end <= lyrics_start:
+            continue
         start = max(previous_end, round(segment.start * 1000), 0)
         end = max(start + 1, round(segment.end * 1000))
         cues.append(f"{len(cues) + 1}\n{timestamp(start)} --> {timestamp(end)}\n{text}\n\n")
@@ -86,6 +88,8 @@ def parser():
     result.add_argument("audio", type=Path, help="MP3 or another supported audio file")
     result.add_argument("-o", "--output", type=Path, help="Output path (default: audio filename with .srt)")
     result.add_argument("--language", default="auto", help="Language code, e.g. en, es, ja; default: auto")
+    result.add_argument("--lyrics-start", type=float, default=0,
+                        help="Skip instrumental intro before this time in seconds; preserve original timestamps")
     result.add_argument("--model", default="small", help="Model name or local model directory (default: small)")
     result.add_argument("--device", choices=("cpu", "cuda", "auto"), default="cpu")
     result.add_argument("--compute-type", default="default", help="CTranslate2 precision; default: int8 on CPU, auto elsewhere")
@@ -106,6 +110,10 @@ def main(argv=None):
             stream.reconfigure(errors="backslashreplace")
     arguments = parser()
     args = arguments.parse_args(argv)
+    if not math.isfinite(args.lyrics_start) or args.lyrics_start < 0:
+        arguments.error("--lyrics-start must be a finite nonnegative number")
+    if args.lyrics_start > 0 and args.vad:
+        arguments.error("Use --lyrics-start or --vad, not both: the transcription backend ignores VAD when clipping")
     audio = args.audio.resolve()
     output = (args.output or audio.with_suffix(".srt")).resolve()
     if not audio.is_file():
@@ -134,13 +142,14 @@ def main(argv=None):
                              local_files_only=args.offline)
         segments, info = model.transcribe(str(audio), language=None if language == "auto" else language,
                                           task="transcribe", beam_size=5, vad_filter=args.vad,
+                                          clip_timestamps=str(args.lyrics_start) if args.lyrics_start else "0",
                                           condition_on_previous_text=False)
         print(f"Language: {info.language}. Transcribing...", file=sys.stderr)
         def progress():
             for segment in segments:
                 print(f"Processed through {segment.end:.1f}s", file=sys.stderr)
                 yield segment
-        content = render_srt(progress(), keep_music_labels=args.keep_music_labels)
+        content = render_srt(progress(), keep_music_labels=args.keep_music_labels, lyrics_start=args.lyrics_start)
         if not content:
             print("No lyrics detected; no output written.", file=sys.stderr)
             return 1

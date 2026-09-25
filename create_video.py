@@ -116,9 +116,37 @@ def format_ass_time(ms):
     return f"{hours}:{minutes:02}:{seconds:02}.{cs:02}"
 
 
+CJK = '\u3400-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f'
+
+
+def sung_units(text):
+    """Count CJK characters and other words, roughly one sung syllable each."""
+    return len(re.findall(r'[' + CJK + r']|[^\W_' + CJK + r']+', text.replace(r'\N', ' ')))
+
+
+def trim_early_starts(cues, slack=1.25, lead_ms=500):
+    """Delay cues stretched over instrumental gaps, e.g. Whisper cues starting at 0:00.
+
+    Uses the song's median pace per sung unit; a cue lasting much longer than its
+    text needs is shortened from the start so it appears near the vocals.
+    """
+    rates = sorted((end - start) / units for start, end, text in cues if (units := sung_units(text)))
+    if not rates:
+        return cues
+    pace = rates[len(rates) // 2]
+    trimmed = []
+    for start, end, text in cues:
+        units = sung_units(text)
+        longest = round(units * pace * slack) + lead_ms
+        if units and end - start > longest:
+            start = end - longest
+        trimmed.append((start, end, text))
+    return trimmed
+
+
 def karaoke_text(text, duration_cs, style='sweep'):
     """Estimate timing by text length; SRT supplies no per-word alignment."""
-    cjk = '\u3400-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f'
+    cjk = CJK
     pieces = re.findall(r'\\N|[' + cjk + r']|\s+|[^\s\\' + cjk + r']+', text)
     units = []
     prefix = ''
@@ -144,12 +172,83 @@ def karaoke_text(text, duration_cs, style='sweep'):
     return ''.join(output)
 
 
-def make_ass(srt, width, height, font, font_size, theme, karaoke=False, karaoke_style='sweep', lyrics_start=0):
+NO_LINE_START = set('，。！？、；：,.!?;:)）」』》”’…')
+
+
+def letter_spacing(line, font_size):
+    """Roomy tracking for Chinese characters; near-default for Latin script."""
+    return round(font_size * (0.15 if re.search('[' + CJK + ']', line) else 0.02))
+
+
+def text_width(text, font_size, spacing):
+    """Rough rendered width; errs wide so estimated rows never overflow."""
+    width = 0
+    for char in text:
+        if re.match('[' + CJK + '　-〿＀-￯]', char):
+            width += font_size
+        elif char.isspace() or char in '.,:;!?\'"()-':
+            width += font_size * 0.25
+        else:
+            width += font_size * (0.6 if char.isupper() else 0.44)
+        width += spacing
+    return width
+
+
+def wrap_line(line, max_width, font_size, spacing):
+    """Split one lyric line into the fewest balanced rows, preferring spaces and punctuation."""
+    line = line.strip()
+    tokens = re.findall(r'\s+|[' + CJK + r']|[^\s' + CJK + r']+', line)
+    n = len(tokens)
+
+    def row(a, b):
+        return ''.join(tokens[a:b]).strip()
+
+    total = text_width(line, font_size, spacing)
+    if total <= max_width or n < 2:
+        return [line]
+
+    def penalty(i):
+        """Prefer breaks after punctuation, then Chinese phrase spaces, then English word spaces."""
+        left = row(0, i)[-1:]
+        if i == n or left in NO_LINE_START:
+            return 0
+        if tokens[i].isspace() or tokens[i - 1].isspace():
+            return 0 if re.match('[' + CJK + ']', left) else 5
+        return 8  # Between CJK characters, mid-phrase.
+
+    points = [0] + [i for i in range(1, n) if tokens[i][0] not in NO_LINE_START] + [n]
+    for rows in range(2, len(points)):
+        target = total / rows
+        best = {0: (0, [])}
+        for index in range(rows):
+            last = index == rows - 1
+            following = {}
+            for a, (cost, cuts) in best.items():
+                for b in points:
+                    if b <= a or last != (b == n):
+                        continue
+                    text = row(a, b)
+                    width = text_width(text, font_size, spacing)
+                    if not text or width > max_width:
+                        continue
+                    score = cost + abs(width - target) / font_size + penalty(b)
+                    if b not in following or score < following[b][0]:
+                        following[b] = (score, cuts + [b])
+            best = following
+        if n in best:
+            cuts = [0] + best[n][1]
+            return [row(a, b) for a, b in zip(cuts, cuts[1:])]
+    return [line]  # One unbreakable word; libass wraps it as a fallback.
+
+
+def make_ass(srt, width, height, font, font_size, theme, karaoke=False, karaoke_style='sweep', lyrics_start=0,
+             lyrics_position='middle', trim_intros=True):
     """Create fixed-resolution subtitle styles without executing SRT markup."""
     if not re.fullmatch(r"[\w .-]+", font):
         raise ValueError("Font family may contain letters, numbers, spaces, dots, underscores, and hyphens")
     colors = {"gold": "&H0086DFFF", "white": "&H00FFFFFF", "neon": "&H00E8FF9B"}
     margin = round(height * 0.12)
+    alignment = 5 if lyrics_position == 'middle' else 2
     header = (
         f"[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n"
         "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
@@ -157,10 +256,10 @@ def make_ass(srt, width, height, font, font_size, theme, karaoke=False, karaoke_
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Lyrics,{font},{font_size},{colors[theme]},&H00A0A0A0,&H00101018,&H80000000,"
-        f"-1,0,0,0,100,100,1,0,1,3,2,2,{round(width * .08)},{round(width * .08)},{margin},1\n\n"
+        f"-1,0,0,0,100,100,0,0,1,{max(3, round(font_size * .05))},2,{alignment},{round(width * .08)},{round(width * .08)},{margin},1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
-    events = []
+    cues = []
     for block in re.split(r"\n\s*\n", srt.lstrip('\ufeff').replace('\r\n', '\n').strip()):
         lines = block.splitlines()
         if len(lines) < 3 or not lines[0].isdigit():
@@ -171,15 +270,29 @@ def make_ass(srt, width, height, font, font_size, theme, karaoke=False, karaoke_
         start, end = map(ass_time, times)
         if end <= start:
             raise ValueError("SRT cue end must be after its start")
-        threshold = round(lyrics_start * 1000)
-        if end <= threshold:
-            continue
-        start = max(start, threshold)
         # Preserve line breaks; neutralize ASS commands in user-supplied lyrics.
         text = r'\N'.join(re.sub(r'</?(?:i|b|u)>', '', line, flags=re.I)
                           .replace('\\', '＼').replace('{', '｛').replace('}', '｝') for line in lines[2:])
+        cues.append((start, end, text))
+    if trim_intros:
+        cues = trim_early_starts(cues)
+    events = []
+    threshold = round(lyrics_start * 1000)
+    for start, end, text in cues:
+        if end <= threshold:
+            continue
+        start = max(start, threshold)
+        rows = []
+        for line in text.split(r'\N'):
+            rows += [(row, letter_spacing(row, font_size))
+                     for row in wrap_line(line, width * .84, font_size, letter_spacing(line, font_size))]
+        text = r'\N'.join(row for row, _ in rows)
         if karaoke:
             text = karaoke_text(text, max(1, end // 10 - start // 10), karaoke_style)
+        # A small blank row between rows adds line spacing, which ASS lacks.
+        gap = rf'\N{{\fs{round(font_size * .35)}}}\h\N'
+        text = r'{\blur2}' + ''.join((gap if index else '') + rf'{{\fs{font_size}\fsp{spacing}}}' + part
+                                     for index, (part, (_, spacing)) in enumerate(zip(text.split(r'\N'), rows)))
         events.append(f"Dialogue: 0,{format_ass_time(start)},{format_ass_time(max(start // 10 * 10 + 10, end))},Lyrics,,0,0,0,,{text}\n")
     return header + ''.join(events)
 
@@ -194,6 +307,9 @@ def parser():
     p.add_argument('--srt', type=Path, help='Optional SRT to burn into the video')
     p.add_argument('--lyrics-start', type=float, default=0,
                    help='Hide lyrics before this time in seconds; later cues keep their timestamps')
+    p.add_argument('--keep-cue-starts', action='store_true',
+                   help='Use SRT start times exactly; by default cues stretched over an instrumental '
+                        'intro or break are delayed to match the song\'s singing pace')
     p.add_argument('--karaoke', action='store_true', help='Highlight lyrics progressively using estimated word timing; requires --srt')
     p.add_argument('--karaoke-style', choices=('sweep', 'step'), default='sweep',
                    help='Smooth color sweep (default) or instant word-by-word color changes')
@@ -201,7 +317,9 @@ def parser():
     p.add_argument('--theme', choices=('gold', 'white', 'neon'), default='gold')
     p.add_argument('--font', default='Microsoft YaHei' if os.name == 'nt' else 'sans-serif', help='Installed font family')
     p.add_argument('--font-file', type=Path, help='Optional TTF/OTF/TTC font to load; also set --font to its family name')
-    p.add_argument('--font-size', type=int, default=56, help='Caption size in output pixels (default: 56)')
+    p.add_argument('--font-size', type=int, default=80, help='Caption size in output pixels (default: 80)')
+    p.add_argument('--lyrics-position', choices=('middle', 'bottom'), default='middle',
+                   help='Place lyrics in the middle (default) or near the bottom')
     p.add_argument('--fit', choices=('cover', 'contain'), default='cover', help='Crop to fill (default) or preserve entire photo with black bars')
     p.add_argument('--dim', type=float, default=0.25, help='Black overlay opacity from 0 to 1 (default: 0.25)')
     p.add_argument('--seconds', type=float, help='Limit duration for a quick preview')
@@ -257,7 +375,9 @@ def main(argv=None):
             if args.srt:
                 (work / 'lyrics.ass').write_text(make_ass(args.srt.read_text(encoding='utf-8-sig'), width, height,
                                                         args.font, args.font_size, args.theme,
-                                                        args.karaoke, args.karaoke_style, args.lyrics_start), encoding='utf-8')
+                                                        args.karaoke, args.karaoke_style, args.lyrics_start,
+                                                        args.lyrics_position, not args.keep_cue_starts),
+                                                        encoding='utf-8')
                 if args.karaoke:
                     print('Karaoke timing is estimated from SRT line durations; audio vocals are unchanged.', file=sys.stderr)
                 if args.font_file:

@@ -14,6 +14,22 @@ def segment(start, end, text):
 
 
 class SrtTests(unittest.TestCase):
+    def test_intro_cutoff_preserves_absolute_timestamps(self):
+        result = create_lyric.render_srt([
+            segment(0, 18, 'intro hallucination'),
+            segment(17, 25, 'first lyric'),
+            segment(30, 35, 'later lyric'),
+        ], lyrics_start=18)
+        self.assertNotIn('intro hallucination', result)
+        self.assertIn('1\n00:00:18,000 --> 00:00:25,000', result)
+        self.assertIn('2\n00:00:30,000 --> 00:00:35,000', result)
+
+    def test_invalid_intro_cutoff_and_vad_conflict(self):
+        for options in (['--lyrics-start', '-1'], ['--lyrics-start', 'nan'],
+                        ['--lyrics-start', 'inf'], ['--lyrics-start', '18', '--vad']):
+            with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                create_lyric.main(['missing.mp3', *options])
+
     def test_music_labels_removed_and_remaining_cues_renumbered(self):
         result = create_lyric.render_srt([
             segment(0, 23, "Zither Harp"),
@@ -72,7 +88,7 @@ class SrtTests(unittest.TestCase):
 
             def transcribe(self, audio, **kwargs):
                 calls["transcribe"] = kwargs
-                return iter([segment(1, 3, "Hola mundo")]), SimpleNamespace(language="es")
+                return iter([segment(18, 23, "Hola mundo")]), SimpleNamespace(language="es")
 
         with tempfile.TemporaryDirectory() as directory:
             audio = Path(directory) / "song.mp3"
@@ -80,11 +96,12 @@ class SrtTests(unittest.TestCase):
             audio.with_suffix(".srt").write_text("previous lyrics", encoding="utf-8")
             with patch.dict("sys.modules", {"faster_whisper": SimpleNamespace(WhisperModel=FakeModel)}):
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    status = create_lyric.main([str(audio), "--language", "es", "--offline", "--overwrite"])
+                    status = create_lyric.main([str(audio), "--language", "es", "--offline", "--overwrite", "--lyrics-start", "18"])
             self.assertEqual(status, 0)
             self.assertIn("Hola mundo", audio.with_suffix(".srt").read_text(encoding="utf-8"))
             self.assertEqual(calls["transcribe"]["task"], "transcribe")
             self.assertEqual(calls["transcribe"]["language"], "es")
+            self.assertEqual(calls["transcribe"]["clip_timestamps"], "18.0")
             self.assertTrue(calls["model"]["local_files_only"])
 
     def test_failed_or_empty_transcription_preserves_existing_srt(self):
