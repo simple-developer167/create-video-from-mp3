@@ -84,6 +84,12 @@ changes each word's color instantly at its estimated start. Completed words
 stay highlighted. Chinese text is highlighted character by character. The
 effect is burned into the MP4, so the player does not need subtitle support.
 
+Like a KTV display, the upcoming line appears dimmed, in a smaller font, below
+(or above, in `--lyrics-position bottom`) the active line for the entire time
+the active line is on screen — not just whatever gap happens to exist before
+it starts. This gives a singer advance notice even back-to-back, gapless
+lines. Pass `--no-karaoke-preview` to show only the single active line.
+
 **Timing is approximate:** ordinary SRT contains line start/end times, not word
 times. This mode distributes each line's duration by character count, including
 across multiple lines in a cue. It does not listen to the audio, detect syllables,
@@ -115,7 +121,7 @@ Photos are still images with optional crossfades, without animated zooms or beat
 | --- | --- |
 | `--format` | `landscape` (1920x1080), `portrait` (1080x1920), `square` (1080x1080) |
 | `--theme` | `gold` (default), `white`, or mint `neon` |
-| `--font` | Installed font family; Windows default `Microsoft YaHei`, otherwise `sans-serif` |
+| `--font` | Installed font family; Windows default `Noto Sans SC Black`, otherwise `sans-serif` |
 | `--font-file` | Load a local TTF/OTF/TTC; also set `--font` to the family name inside that font |
 | `--font-size` | Font size in output pixels, 12–200; default 80 |
 | `--lyrics-position` | `middle` (default) or `bottom` |

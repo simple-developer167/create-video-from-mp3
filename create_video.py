@@ -241,8 +241,24 @@ def wrap_line(line, max_width, font_size, spacing):
     return [line]  # One unbreakable word; libass wraps it as a fallback.
 
 
+def wrap_rows(text, max_width, font_size):
+    """Wrap each \\N-separated line into (row, spacing) pairs at a given font size."""
+    rows = []
+    for line in text.split(r'\N'):
+        rows += [(row, letter_spacing(row, font_size))
+                 for row in wrap_line(line, max_width, font_size, letter_spacing(line, font_size))]
+    return rows
+
+
+def styled_text(rows, font_size):
+    """Join wrapped rows with a small spacer row for line spacing, which ASS lacks."""
+    gap = rf'\N{{\fs{round(font_size * .35)}}}\h\N'
+    return r'{\blur2}' + ''.join((gap if index else '') + rf'{{\fs{font_size}\fsp{spacing}}}' + row
+                                 for index, (row, spacing) in enumerate(rows))
+
+
 def make_ass(srt, width, height, font, font_size, theme, karaoke=False, karaoke_style='sweep', lyrics_start=0,
-             lyrics_position='middle', trim_intros=True):
+             lyrics_position='middle', trim_intros=True, karaoke_preview=True):
     """Create fixed-resolution subtitle styles without executing SRT markup."""
     if not re.fullmatch(r"[\w .-]+", font):
         raise ValueError("Font family may contain letters, numbers, spaces, dots, underscores, and hyphens")
@@ -276,24 +292,50 @@ def make_ass(srt, width, height, font, font_size, theme, karaoke=False, karaoke_
         cues.append((start, end, text))
     if trim_intros:
         cues = trim_early_starts(cues)
-    events = []
     threshold = round(lyrics_start * 1000)
+    filtered = []
     for start, end, text in cues:
         if end <= threshold:
             continue
-        start = max(start, threshold)
-        rows = []
-        for line in text.split(r'\N'):
-            rows += [(row, letter_spacing(row, font_size))
-                     for row in wrap_line(line, width * .84, font_size, letter_spacing(line, font_size))]
-        text = r'\N'.join(row for row, _ in rows)
+        filtered.append((max(start, threshold), end, text))
+
+    preview_font_size = round(font_size * 0.68)
+    row_height = font_size * 1.25
+    preview_gap = round(font_size * 0.5)
+
+    def preview_position(active_rows):
+        """Anchor the upcoming-line preview just past the active block's edge."""
+        if lyrics_position == 'middle':
+            y = round(height / 2 + active_rows * row_height / 2 + preview_gap)
+            return width // 2, y, 8  # \an8: grows downward from a top anchor
+        y = round(height - margin - active_rows * row_height - preview_gap)
+        return width // 2, y, 2  # \an2: grows upward from a bottom anchor
+
+    events = []
+    for i, (start, end, text) in enumerate(filtered):
+        rows = wrap_rows(text, width * .84, font_size)
+        body = r'\N'.join(row for row, _ in rows)
         if karaoke:
-            text = karaoke_text(text, max(1, end // 10 - start // 10), karaoke_style)
-        # A small blank row between rows adds line spacing, which ASS lacks.
-        gap = rf'\N{{\fs{round(font_size * .35)}}}\h\N'
-        text = r'{\blur2}' + ''.join((gap if index else '') + rf'{{\fs{font_size}\fsp{spacing}}}' + part
-                                     for index, (part, (_, spacing)) in enumerate(zip(text.split(r'\N'), rows)))
-        events.append(f"Dialogue: 0,{format_ass_time(start)},{format_ass_time(max(start // 10 * 10 + 10, end))},Lyrics,,0,0,0,,{text}\n")
+            body = karaoke_text(body, max(1, end // 10 - start // 10), karaoke_style)
+            formatted = r'{\blur2}' + ''.join(
+                (rf'\N{{\fs{round(font_size * .35)}}}\h\N' if index else '') + rf'{{\fs{font_size}\fsp{spacing}}}' + part
+                for index, (part, (_, spacing)) in enumerate(zip(body.split(r'\N'), rows)))
+        else:
+            formatted = styled_text(rows, font_size)
+        display_end = max(start // 10 * 10 + 10, end)
+        events.append(f"Dialogue: 0,{format_ass_time(start)},{format_ass_time(display_end)},Lyrics,,0,0,0,,{formatted}\n")
+
+        # Show the next line, dimmed, for the whole time this one is active,
+        # like a KTV display, instead of relying on a gap that may not exist.
+        if karaoke and karaoke_preview and i + 1 < len(filtered):
+            next_start, next_end, next_text = filtered[i + 1]
+            if next_start > start:
+                preview_rows = wrap_rows(next_text, width * .84, preview_font_size)
+                x, y, an = preview_position(len(rows))
+                preview = (rf'{{\an{an}\pos({x},{y})\blur2\c&H00A0A0A0&\alpha&H60&}}' + ''.join(
+                    (rf'\N{{\fs{round(preview_font_size * .35)}}}\h\N' if index else '') + rf'{{\fs{preview_font_size}\fsp{spacing}}}' + row
+                    for index, (row, spacing) in enumerate(preview_rows)))
+                events.append(f"Dialogue: 0,{format_ass_time(start)},{format_ass_time(next_start)},Lyrics,,0,0,0,,{preview}\n")
     return header + ''.join(events)
 
 
@@ -313,9 +355,11 @@ def parser():
     p.add_argument('--karaoke', action='store_true', help='Highlight lyrics progressively using estimated word timing; requires --srt')
     p.add_argument('--karaoke-style', choices=('sweep', 'step'), default='sweep',
                    help='Smooth color sweep (default) or instant word-by-word color changes')
+    p.add_argument('--no-karaoke-preview', action='store_true',
+                   help='Hide the dimmed upcoming line normally shown below the active one; requires --karaoke')
     p.add_argument('--format', choices=SIZES, default='landscape')
     p.add_argument('--theme', choices=('gold', 'white', 'neon'), default='gold')
-    p.add_argument('--font', default='Microsoft YaHei' if os.name == 'nt' else 'sans-serif', help='Installed font family')
+    p.add_argument('--font', default='Noto Sans SC Black' if os.name == 'nt' else 'sans-serif', help='Installed font family')
     p.add_argument('--font-file', type=Path, help='Optional TTF/OTF/TTC font to load; also set --font to its family name')
     p.add_argument('--font-size', type=int, default=80, help='Caption size in output pixels (default: 80)')
     p.add_argument('--lyrics-position', choices=('middle', 'bottom'), default='middle',
@@ -376,7 +420,8 @@ def main(argv=None):
                 (work / 'lyrics.ass').write_text(make_ass(args.srt.read_text(encoding='utf-8-sig'), width, height,
                                                         args.font, args.font_size, args.theme,
                                                         args.karaoke, args.karaoke_style, args.lyrics_start,
-                                                        args.lyrics_position, not args.keep_cue_starts),
+                                                        args.lyrics_position, not args.keep_cue_starts,
+                                                        not args.no_karaoke_preview),
                                                         encoding='utf-8')
                 if args.karaoke:
                     print('Karaoke timing is estimated from SRT line durations; audio vocals are unchanged.', file=sys.stderr)
