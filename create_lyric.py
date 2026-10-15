@@ -143,7 +143,7 @@ def main(argv=None):
         segments, info = model.transcribe(str(audio), language=None if language == "auto" else language,
                                           task="transcribe", beam_size=5, vad_filter=args.vad,
                                           clip_timestamps=str(args.lyrics_start) if args.lyrics_start else "0",
-                                          condition_on_previous_text=False)
+                                          condition_on_previous_text=False, word_timestamps=True)
         print(f"Language: {info.language}. Transcribing...", file=sys.stderr)
         def progress():
             for segment in segments:
